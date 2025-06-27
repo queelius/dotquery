@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dotquery"
+version = "0.1.0"
+authors = [
+  { name="Alex Towell", email="lex@metafunctor.com" },
+]
+description = "A logic-based query engine for nested data."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "dotpath-x",
+    "PyYAML>=5.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/queelius/dotquery"
+Issues = "https://github.ccom/queelius/dotquery/issues"
+
+[project.scripts]
+dotquery = "dotquery.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dotquery"]
