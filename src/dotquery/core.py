@@ -1,7 +1,16 @@
-from typing import Any, Callable, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable, List
+import operator
+import re
 
-from dotpath_x import DotPath
+from dotpath import DotPath
 
+
+def _re_match_op(v, r):
+    """Internal helper for regex matching."""
+    return bool(re.match(r, str(v)))
+
+
+# --- Core Query and Expression Classes (AST) ---
 
 class Query:
     """
@@ -35,6 +44,14 @@ class Query:
     def __invert__(self) -> "Query":
         """Negates this query."""
         return Query(Not(self.expression))
+
+    def __call__(self, data: Any) -> bool:
+        """Allows the query to be called like a function."""
+        return self.evaluate(data)
+
+    def filter(self, data: Iterable[Any]) -> Iterable[Any]:
+        """Filters an iterable of data objects, yielding matches."""
+        return (item for item in data if self.evaluate(item))
 
 
 class Expression:
@@ -170,7 +187,7 @@ class Condition(Expression):
         If no values are found at the path, the condition is False.
         """
         try:
-            # Use dotpath-x to find all possible values at the given path
+            # Use dotpath to find all possible values at the given path
             values = list(DotPath(self.path).find(data))
             if not values:
                 return False  # No values found, so condition cannot be met
@@ -192,18 +209,15 @@ class Condition(Expression):
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Condition":
-        import operator
-        import re
-
-        def _re_match_op(v, r):
-            return bool(re.match(r, str(v)))
-
         OP_MAP = {
             "eq": operator.eq,
-            "contains": operator.contains,
+            "ne": operator.ne,
             "gt": operator.gt,
+            "ge": operator.ge,
             "lt": operator.lt,
-            "_re_match_op": _re_match_op,
+            "le": operator.le,
+            "contains": operator.contains,
+            "matches": _re_match_op,
         }
         QUANTIFIER_MAP = {"any": any, "all": all}
 
@@ -212,7 +226,7 @@ class Condition(Expression):
         if op_func is None:
             raise ValueError(f"Unknown operator function: {op_name}")
 
-        quantifier_name = data["quantifier"]
+        quantifier_name = data.get("quantifier", "any") # Default to 'any'
         quantifier_func = QUANTIFIER_MAP.get(quantifier_name)
         if quantifier_func is None:
             raise ValueError(f"Unknown quantifier function: {quantifier_name}")
@@ -225,99 +239,58 @@ class Condition(Expression):
         )
 
 
-# --- Factory functions for creating condition Queries ---
+# --- Fluent Query Builder ---
 
-
-def equals(path: str, value: Any) -> Query:
+class Q:
     """
-    Creates a Query that checks if *any* value at `path` equals `value`.
+    A factory for creating Query objects in a fluent, Pythonic way.
+
+    Provides a more intuitive and readable way to construct complex queries
+    by chaining methods, for example:
+    `Q("user.profile.tags").contains("python")`
+    `Q("items.price").all().greater(10)`
     """
-    import operator
 
-    return Query(Condition(path, operator.eq, value, quantifier=any))
+    def __init__(self, path: str, quantifier: Callable[[Iterable], bool] = any):
+        self.path = path
+        self.quantifier = quantifier
 
+    def all(self) -> "Q":
+        """
+        Applies the 'all' quantifier to the next condition.
+        This requires that *all* values found at the path satisfy the condition.
+        If no values are found, it evaluates to True.
+        """
+        return Q(self.path, quantifier=all)
 
-def contains(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *any* collection at `path` contains `value`.
-    """
-    import operator
+    def equals(self, value: Any) -> Query:
+        """Checks if the value at path is equal to the given value."""
+        return Query(Condition(self.path, operator.eq, value, self.quantifier))
 
-    return Query(Condition(path, operator.contains, value, quantifier=any))
+    def not_equals(self, value: Any) -> Query:
+        """Checks if the value at path is not equal to the given value."""
+        return Query(Condition(self.path, operator.ne, value, self.quantifier))
 
+    def greater(self, value: Any) -> Query:
+        """Checks if the value at path is greater than the given value."""
+        return Query(Condition(self.path, operator.gt, value, self.quantifier))
 
-def greater(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *any* value at `path` is greater than `value`.
-    """
-    import operator
+    def greater_equal(self, value: Any) -> Query:
+        """Checks if the value at path is greater than or equal to the given value."""
+        return Query(Condition(self.path, operator.ge, value, self.quantifier))
 
-    return Query(Condition(path, operator.gt, value, quantifier=any))
+    def less(self, value: Any) -> Query:
+        """Checks if the value at path is less than the given value."""
+        return Query(Condition(self.path, operator.lt, value, self.quantifier))
 
+    def less_equal(self, value: Any) -> Query:
+        """Checks if the value at path is less than or equal to the given value."""
+        return Query(Condition(self.path, operator.le, value, self.quantifier))
 
-def less(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *any* value at `path` is less than `value`.
-    """
-    import operator
+    def contains(self, value: Any) -> Query:
+        """Checks if the collection at path contains the given value."""
+        return Query(Condition(self.path, operator.contains, value, self.quantifier))
 
-    return Query(Condition(path, operator.lt, value, quantifier=any))
-
-
-# --- 'All' Quantifier Factory Functions ---
-
-
-def all_equals(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *all* values at `path` equal `value`.
-    """
-    import operator
-
-    return Query(Condition(path, operator.eq, value, quantifier=all))
-
-
-def all_contains(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *all* collections at `path` contain `value`.
-    """
-    import operator
-
-    return Query(Condition(path, operator.contains, value, quantifier=all))
-
-
-def all_greater(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *all* values at `path` are greater than `value`.
-    """
-    import operator
-
-    return Query(Condition(path, operator.gt, value, quantifier=all))
-
-
-def all_less(path: str, value: Any) -> Query:
-    """
-    Creates a Query that checks if *all* values at `path` are less than `value`.
-    """
-    import operator
-
-    return Query(Condition(path, operator.lt, value, quantifier=all))
-
-
-def _re_match_op(v, r):
-    import re
-
-    return bool(re.match(r, str(v)))
-
-
-def matches(path: str, regex: str) -> Query:
-    """
-    Creates a Query that checks if *any* string value at `path` matches the `regex`.
-    """
-    return Query(Condition(path, _re_match_op, regex, quantifier=any))
-
-
-def all_matches(path: str, regex: str) -> Query:
-    """
-    Creates a Query that checks if *all* string values at `path` match the `regex`.
-    """
-    return Query(Condition(path, _re_match_op, regex, quantifier=all))
+    def matches(self, regex: str) -> Query:
+        """Checks if the string value at path matches the given regex."""
+        return Query(Condition(self.path, _re_match_op, regex, self.quantifier))

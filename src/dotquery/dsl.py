@@ -1,36 +1,8 @@
 import json
 from typing import List
 
-from .core import (
-    Query,
-    contains,
-    equals,
-    greater,
-    less,
-    matches,
-    all_contains,
-    all_equals,
-    all_greater,
-    all_less,
-    all_matches,
-)
+from .core import Q, Query
 
-# Mapping from DSL operator to core function
-OPERATORS = {
-    "equals": equals,
-    "contains": contains,
-    "greater": greater,
-    "less": less,
-    "matches": matches,
-}
-
-ALL_OPERATORS = {
-    "equals": all_equals,
-    "contains": all_contains,
-    "greater": all_greater,
-    "less": all_less,
-    "matches": all_matches,
-}
 
 class DSLParser:
     """
@@ -43,8 +15,9 @@ class DSLParser:
     factor     ::= condition | 'not' factor | '(' expression ')'
     condition  ::= [quantifier] operator path value
     quantifier ::= 'any' | 'all'
-    operator   ::= 'equals' | 'contains' | 'greater' | 'less' | 'matches'
+    operator   ::= 'equals' | 'not_equals' | 'greater' | 'greater_equal' | 'less' | 'less_equal' | 'contains' | 'matches'
     """
+
     def __init__(self, tokens: List[str]):
         self.tokens = tokens
         self.pos = 0
@@ -98,34 +71,40 @@ class DSLParser:
     def parse_condition(self) -> Query:
         quantifier = "any"
         token = self.current_token()
-        if token in ("any", "all"):
+        if token in ["any", "all"]:
             quantifier = token
             self.advance()
 
-        operator_str = self.current_token()
-        if operator_str not in OPERATORS:
-            raise ValueError(f"Unknown operator: '{operator_str}'. Expected one of {list(OPERATORS.keys())}")
+        operator = self.current_token()
+        if operator is None:
+            raise ValueError("Unexpected end of query: expected operator")
         self.advance()
 
         path = self.current_token()
         if path is None:
-            raise ValueError(f"Operator '{operator_str}' requires a path argument.")
+            raise ValueError("Unexpected end of query: expected path")
         self.advance()
 
         value_str = self.current_token()
         if value_str is None:
-            raise ValueError(f"Operator '{operator_str}' requires a value argument.")
+            raise ValueError("Unexpected end of query: expected value")
         self.advance()
 
-        # Try to convert value to a number or bool, otherwise treat as string
         try:
+            # Try to parse value as JSON (handles numbers, booleans, null, strings)
             value = json.loads(value_str)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
+            # Fallback for unquoted strings
             value = value_str
 
+        # Create query using the fluent Q builder
+        q_builder = Q(path)
         if quantifier == "all":
-            op_func = ALL_OPERATORS[operator_str]
-        else:
-            op_func = OPERATORS[operator_str]
+            q_builder = q_builder.all()
 
-        return op_func(path, value)
+        # Map operator string to Q method
+        op_method = getattr(q_builder, operator, None)
+        if op_method and callable(op_method):
+            return op_method(value)
+        else:
+            raise ValueError(f"Invalid operator: {operator}")
